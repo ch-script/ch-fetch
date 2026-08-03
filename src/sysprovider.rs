@@ -25,9 +25,9 @@ impl SysinfoManager {
         }
     }
 
-    pub fn refresh(&mut self) {
-        self.sys.refresh_all();
-    }
+    // pub fn refresh(&mut self) {
+    //     self.sys.refresh_all();
+    // }
     
     // GETTERS FROM SYSTEM THINGS
     pub fn get_kernel(&self) -> String {

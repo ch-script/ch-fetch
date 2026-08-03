@@ -4,21 +4,21 @@
 // Imports
 
 use crossterm::{
-    cursor::{MoveTo, position},
-    event::{self, Event, KeyCode, KeyEventKind},
+    //cursor::{MoveTo, position},
+    //event::{self, Event, KeyCode, KeyEventKind},
     queue,
-    style::{Color, Print, ResetColor, SetForegroundColor},
-    terminal::{
-        disable_raw_mode, enable_raw_mode, Clear, ClearType,
-        EnterAlternateScreen, LeaveAlternateScreen,
-    },
+    style::{Print, SetForegroundColor},
+    //terminal::{
+    //    disable_raw_mode, enable_raw_mode, Clear, ClearType,
+    //    EnterAlternateScreen, LeaveAlternateScreen,
+    //},
 };
 use std::io::{stdout, BufWriter, Write};
-use std::time::Duration;
-use std::process::Command;
+//use std::time::Duration;
+//use std::process::Command;
 
-use std::thread::sleep;
-use std::thread;
+//use std::thread::sleep;
+//use std::thread;
 
 // Modules
 
@@ -33,34 +33,44 @@ use crate::theme::Theme;
 
 // Main Script
 
+pub enum InfoRow<'a> {
+    Title { user: &'a str, host: &'a str },
+    Separator,
+    Item { label: &'a str, value: &'a str },
+    Empty,
+}
+
 pub fn terminal_output(data: &InformationManager, ascii: &AsciiArt) {
 
     let theme = Theme::default(); // default colors for the time being
     //enable_raw_mode();
     let mut principal_stdout = BufWriter::new(stdout()); // crossform migration!
 
-    let ascii_lines: Vec<&str> = ascii.get().lines().collect();
+    let ascii_content = ascii.get(data.os());
+    let ascii_lines: Vec<&str> = ascii_content.lines().collect();
     
     let disk_raw = data.memory().trim();
     let disk_lines: Vec<&str> = disk_raw.lines().collect();
 
-    let mut info_lines = vec![
-        format!("User:     {}", data.user()),
-        format!("Host:     {}", data.host()),
-        "-----------------------------".to_string(),
-        format!("Distro:   {}", data.os()),
-        format!("Kernel:   {}", data.kernel()),
-        format!("Uptime:   {}", data.uptime()),
-        format!("Terminal: {}", data.terminal()),
-        format!("Shell:    {}", data.shell()),
-        "".to_string(),
-        format!("CPU:      {}", data.cpu()),
-        format!("GPU:      {}", data.gpu()),
-        format!("RAM:      {}", data.ram()),
+    let mut info_lines: Vec<InfoRow> = vec![
+        InfoRow::Title { user: data.user(), host: data.host() },
+        InfoRow::Separator,
+        InfoRow::Item { label: "Distro:", value: data.os() },
+        InfoRow::Item { label: "Kernel:", value: data.kernel() },
+        InfoRow::Item { label: "Uptime:", value: data.uptime() },
+        InfoRow::Item { label: "Terminal:", value: data.terminal() },
+        InfoRow::Item { label: "Shell:", value: data.shell() },
+        InfoRow::Empty,
+        InfoRow::Item { label: "CPU:", value: data.cpu() },
+        InfoRow::Item { label: "GPU:", value: data.gpu() },
+        InfoRow::Item { label: "RAM:", value: data.ram() },
     ];
 
-    for d in disk_lines {
-        info_lines.push(d.to_string());
+    for d in &disk_lines {
+        info_lines.push(InfoRow::Item { 
+            label: "Disk:", 
+            value: d 
+        });
     }
 
     let total_lines = max(ascii_lines.len(), info_lines.len());
@@ -68,27 +78,55 @@ pub fn terminal_output(data: &InformationManager, ascii: &AsciiArt) {
     let ascii_width = ascii_lines.iter().map(|l| l.chars().count()).max().unwrap_or(0);
 
     for i in 0..total_lines {
-        let ascii_part = if i < ascii_lines.len() {
+        if i < ascii_lines.len() {
             let line = ascii_lines[i];
-            let char_count = line.chars().count();
-            let pad = " ".repeat(ascii_width.saturating_sub(char_count));
-            format!("{}{}", line, pad)
+            let _ = queue!(principal_stdout, SetForegroundColor(theme.ascii_color), Print(line));
+            
+            let pad_len = ascii_width.saturating_sub(line.chars().count());
+            if pad_len > 0 {
+                let _ = queue!(principal_stdout, Print(format_args!("{:width$}", "", width = pad_len)));
+            }
         } else {
-            " ".repeat(ascii_width)
-        };
+            let _ = queue!(principal_stdout, Print(format_args!("{:width$}", "", width = ascii_width)));
+        }
 
-        let info_part = if i < info_lines.len() {
-            &info_lines[i]
-        } else {
-            ""
-        };
+        let _ = queue!(principal_stdout, Print("          "));
 
-        let _ = queue!(principal_stdout, SetForegroundColor(theme.ascii_color), Print(format!("{}", ascii_part))); 
-        let _ = queue!(principal_stdout, Print("          ")); // padding in a sense
-        let _ = queue!(principal_stdout, SetForegroundColor(Color::White), Print(format!("{}\n", info_part)));
+        if i < info_lines.len() {
+            match info_lines[i] {
+                InfoRow::Title { user, host } => {
+                    let _ = queue!(principal_stdout, SetForegroundColor(theme.title_color), Print(user));
+                    let _ = queue!(principal_stdout, SetForegroundColor(theme.separator_color), Print("@"));
+                    let _ = queue!(principal_stdout, SetForegroundColor(theme.title_color), Print(host));
+                }
+                InfoRow::Separator => {
+                    let _ = queue!(
+                        principal_stdout, 
+                        SetForegroundColor(theme.separator_color), 
+                        Print("-----------------------------")
+                    );
+                }
+                InfoRow::Item { label, value } => {
+                    let _ = queue!(
+                        principal_stdout, 
+                        SetForegroundColor(theme.label_color), 
+                        Print(format_args!("{:<10}", label))
+                    );
+                    let _ = queue!(
+                        principal_stdout, 
+                        SetForegroundColor(theme.value_color), 
+                        Print(value)
+                    );
+                }
+                InfoRow::Empty => {}
+            }
+        }
+
+        let _ = queue!(principal_stdout, Print("\n"));
     }
 
     let _ = principal_stdout.flush();
+
 
 
     // garbage code to a future animated implementation, yk... main thread is required to run this, but if that's activated you cannot access bash..
