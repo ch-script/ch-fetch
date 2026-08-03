@@ -7,6 +7,7 @@ mod ascii;
 mod system;
 mod sysprovider;
 mod terminalrenderer;
+mod theme;
 
 // Use Modules
 
