@@ -26,7 +26,7 @@ impl AsciiArt {
     }
 
     pub fn get(&self, distro_name: &str) -> String {
-        let normalized_distro_name = distro_name.to_lowercase();
+        let normalized_distro_name = distro_name.to_lowercase().replace(' ', "_");
 
         if self.allow_customs { // if customs is activated
             let custom_path = format!("{}/ascii.txt", self.custom_dir);
