@@ -4,7 +4,7 @@
 
 // Sysinfo is the crate this app uses to get the system's info... Pretty self explanatory, here the docs: https://docs.rs/sysinfo/latest/sysinfo/
 use sysinfo::{
-    Disks, System,
+    Disks, System, RefreshKind, CpuRefreshKind, MemoryRefreshKind,
 };
 
 use std::env;
@@ -20,8 +20,11 @@ pub struct SysinfoManager {
 
 impl SysinfoManager {
     pub fn new() -> Self {
+
+        let refresh = RefreshKind::nothing().with_cpu(CpuRefreshKind::everything()).with_memory(MemoryRefreshKind::everything()); // just what we need for now... (optimization)
+
         SysinfoManager {
-            sys: System::new_all(), // this initialices the sysinfo crate
+            sys: System::new_with_specifics(refresh),
         }
     }
 
@@ -118,17 +121,22 @@ impl SysinfoManager {
 
 
     pub fn get_gpu(&self) -> String {
-        let commands = [
-            "nvidia-smi --query-gpu=name --format=csv,noheader",
-            "lspci | grep -i 'VGA' | grep -oP 'Advanced Micro Devices, Inc. \\K.*'",
-            "lspci | grep -i 'VGA' | grep -oP 'Intel Corporation \\K.*'",
-        ];
+        if let Ok(out) = Command::new("nvidia-smi").args(["--query-gpu=name", "--format=csv,noheader"]).output()
+        {
+            let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !s.is_empty() { return s; }
+        }
 
-        for cmd in commands {
-            if let Ok(output) = Command::new("sh").args(&["-c", cmd]).output() {
-                let result = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                if !result.is_empty() {
-                    return result;
+        if let Ok(out) = Command::new("lspci").output() {
+            let text = String::from_utf8_lossy(&out.stdout);
+            for line in text.lines() {
+                if line.contains("VGA") {
+                    if let Some(idx) = line.find("Advanced Micro Devices, Inc.") {
+                        return line[idx..].to_string();
+                    }
+                    if let Some(idx) = line.find("Intel Corporation") {
+                        return line[idx..].to_string();
+                    }
                 }
             }
         }
