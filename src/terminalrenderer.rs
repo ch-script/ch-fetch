@@ -28,19 +28,33 @@ use std::io::{stdout, BufWriter, Write};
 
 use crate::InformationManager;
 use crate::AsciiArt;
-use std::cmp::max;
+// use std::cmp::max;
 use crate::theme::Theme;
+use crate::config::{Config, Module};
 
 // Main Script
 
-pub enum InfoRow<'a> {
-    Title { user: &'a str, host: &'a str },
-    Separator,
-    Item { label: &'a str, value: &'a str },
+enum RenderLine {
+    Text { indent: usize, label: String, value: String },
+    Title { indent: usize, user: String, host: String },
+    Separator { indent: usize },
+    Raw { indent: usize, text: String },
     Empty,
 }
 
-pub fn terminal_output(data: &InformationManager, ascii: &AsciiArt) {
+impl RenderLine {
+    fn len(&self) -> usize {
+        match self {
+            RenderLine::Text { indent, label, value } => indent + label.chars().count() + value.chars().count(),
+            RenderLine::Title { indent, user, host } => indent + user.chars().count() + 1 + host.chars().count(),
+            RenderLine::Separator { indent } => indent + 29,
+            RenderLine::Raw { indent, text } => indent + text.chars().count(),
+            RenderLine::Empty => 0,
+        }
+    }
+}
+
+pub fn terminal_output(data: &InformationManager, ascii: &AsciiArt, config: &Config) {
 
     let theme = Theme::default(); // default colors for the time being
     //enable_raw_mode();
@@ -52,73 +66,106 @@ pub fn terminal_output(data: &InformationManager, ascii: &AsciiArt) {
     let disk_raw = data.memory().trim();
     let disk_lines: Vec<&str> = disk_raw.lines().collect();
 
-    let mut info_lines: Vec<InfoRow> = vec![
-        InfoRow::Title { user: data.user(), host: data.host() },
-        InfoRow::Separator,
-        InfoRow::Item { label: "Distro:", value: data.os() },
-        InfoRow::Item { label: "Kernel:", value: data.kernel() },
-        InfoRow::Item { label: "Uptime:", value: data.uptime() },
-        InfoRow::Item { label: "Terminal:", value: data.terminal() },
-        InfoRow::Item { label: "Shell:", value: data.shell() },
-        InfoRow::Empty,
-        InfoRow::Item { label: "CPU:", value: data.cpu() },
-        InfoRow::Item { label: "GPU:", value: data.gpu() },
-        InfoRow::Item { label: "RAM:", value: data.ram() },
-    ];
+    let label_w = config.padding.label_width;
+    let info_indent = config.padding.indent_info;
+    let ascii_indent = config.padding.indent_ascii;
 
-    for d in &disk_lines {
-        info_lines.push(InfoRow::Item { 
-            label: "Disk:", 
-            value: d 
-        });
-    }
+    let make_label = |raw: &str| -> String {
+        format!("{:width$}", raw, width = label_w)
+    };
 
-    let total_lines = max(ascii_lines.len(), info_lines.len());
+    let mut columns_render: Vec<Vec<RenderLine>> = Vec::new();
 
-    let ascii_width = ascii_lines.iter().map(|l| l.chars().count()).max().unwrap_or(0);
+    for col_modules in &config.layout.columns {
+        let mut column_lines: Vec<RenderLine> = Vec::new();
 
-    for i in 0..total_lines {
-        if i < ascii_lines.len() {
-            let line = ascii_lines[i];
-            let _ = queue!(principal_stdout, SetForegroundColor(theme.ascii_color), Print(line));
-            
-            let pad_len = ascii_width.saturating_sub(line.chars().count());
-            if pad_len > 0 {
-                let _ = queue!(principal_stdout, Print(format_args!("{:width$}", "", width = pad_len)));
+        for module in col_modules {
+            match module {
+                Module::Ascii => {
+                    for line in &ascii_lines {
+                        column_lines.push(RenderLine::Raw { indent: ascii_indent, text: line.to_string() });
+                    }
+                }
+                Module::Title => {
+                    column_lines.push(RenderLine::Title {
+                        indent: info_indent,
+                        user: data.user().to_string(),
+                        host: data.host().to_string(),
+                    });
+                }
+                Module::Separator => {
+                    column_lines.push(RenderLine::Separator { indent: info_indent });
+                }
+                Module::Os => column_lines.push(RenderLine::Text { indent: info_indent, label: make_label("Distro:"), value: data.os().into() }),
+                Module::Kernel => column_lines.push(RenderLine::Text { indent: info_indent, label: make_label("Kernel:"), value: data.kernel().into() }),
+                Module::Uptime => column_lines.push(RenderLine::Text { indent: info_indent, label: make_label("Uptime:"), value: data.uptime().into() }),
+                Module::Terminal => column_lines.push(RenderLine::Text { indent: info_indent, label: make_label("Terminal:"), value: data.terminal().into() }),
+                Module::Shell => column_lines.push(RenderLine::Text { indent: info_indent, label: make_label("Shell:"), value: data.shell().into() }),
+                Module::Cpu => column_lines.push(RenderLine::Text { indent: info_indent, label: make_label("CPU:"), value: data.cpu().into() }),
+                Module::Gpu => column_lines.push(RenderLine::Text { indent: info_indent, label: make_label("GPU:"), value: data.gpu().into() }),
+                Module::Ram => column_lines.push(RenderLine::Text { indent: info_indent, label: make_label("RAM:"), value: data.ram().into() }),
+                Module::Disk => {
+                    for d in &disk_lines {
+                        column_lines.push(RenderLine::Text { indent: info_indent, label: make_label("Disk:"), value: d.to_string() });
+                    }
+                }
+                Module::Empty => column_lines.push(RenderLine::Empty),
             }
-        } else {
-            let _ = queue!(principal_stdout, Print(format_args!("{:width$}", "", width = ascii_width)));
         }
 
-        let _ = queue!(principal_stdout, Print("          "));
+        columns_render.push(column_lines);
+    }
 
-        if i < info_lines.len() {
-            match info_lines[i] {
-                InfoRow::Title { user, host } => {
-                    let _ = queue!(principal_stdout, SetForegroundColor(theme.title_color), Print(user));
-                    let _ = queue!(principal_stdout, SetForegroundColor(theme.separator_color), Print("@"));
-                    let _ = queue!(principal_stdout, SetForegroundColor(theme.title_color), Print(host));
+    let col_widths: Vec<usize> = columns_render.iter().map(|col| col.iter().map(|line| line.len()).max().unwrap_or(0)).collect();
+
+    let max_rows = columns_render.iter().map(|col| col.len()).max().unwrap_or(0);
+
+    //println!("DEBUG col_widths: {:?}", col_widths);
+
+    for row in 0..max_rows {
+        for (col_idx, column) in columns_render.iter().enumerate() {
+            let width = col_widths[col_idx];
+            let is_last_col = col_idx == columns_render.len() - 1;
+
+            if let Some(line) = column.get(row) {
+                let printed_len = line.len();
+
+                match line {
+                    RenderLine::Title { indent, user, host } => {
+                        if *indent > 0 { let _ = queue!(principal_stdout, Print(format_args!("{:width$}", "", width = indent))); }
+                        let _ = queue!(principal_stdout, SetForegroundColor(theme.title_color), Print(user));
+                        let _ = queue!(principal_stdout, SetForegroundColor(theme.separator_color), Print("@"));
+                        let _ = queue!(principal_stdout, SetForegroundColor(theme.title_color), Print(host));
+                    }
+                    RenderLine::Separator { indent } => {
+                        if *indent > 0 { let _ = queue!(principal_stdout, Print(format_args!("{:width$}", "", width = indent))); }
+                        let _ = queue!(
+                            principal_stdout,
+                            SetForegroundColor(theme.separator_color),
+                            Print("-----------------------------")
+                        );
+                    }
+                    RenderLine::Text { indent, label, value } => {
+                        if *indent > 0 { let _ = queue!(principal_stdout, Print(format_args!("{:width$}", "", width = indent))); }
+                        let _ = queue!(principal_stdout, SetForegroundColor(theme.label_color), Print(label));
+                        let _ = queue!(principal_stdout, SetForegroundColor(theme.value_color), Print(value));
+                    }
+                    RenderLine::Raw { indent, text } => {
+                        if *indent > 0 { let _ = queue!(principal_stdout, Print(format_args!("{:width$}", "", width = indent))); }
+                        let _ = queue!(principal_stdout, SetForegroundColor(theme.ascii_color), Print(text));
+                    }
+                    RenderLine::Empty => {}
                 }
-                InfoRow::Separator => {
-                    let _ = queue!(
-                        principal_stdout, 
-                        SetForegroundColor(theme.separator_color), 
-                        Print("-----------------------------")
-                    );
+
+                if !is_last_col {
+                    let pad = width.saturating_sub(printed_len) + config.padding.column_gap;
+                    let _ = queue!(principal_stdout, Print(format_args!("{:width$}", "", width = pad)));
                 }
-                InfoRow::Item { label, value } => {
-                    let _ = queue!(
-                        principal_stdout, 
-                        SetForegroundColor(theme.label_color), 
-                        Print(format_args!("{:<10}", label))
-                    );
-                    let _ = queue!(
-                        principal_stdout, 
-                        SetForegroundColor(theme.value_color), 
-                        Print(value)
-                    );
+            } else {
+                if !is_last_col {
+                    let pad = width + config.padding.column_gap;
+                    let _ = queue!(principal_stdout, Print(format_args!("{:width$}", "", width = pad)));
                 }
-                InfoRow::Empty => {}
             }
         }
 
@@ -126,6 +173,7 @@ pub fn terminal_output(data: &InformationManager, ascii: &AsciiArt) {
     }
 
     let _ = principal_stdout.flush();
+}
 
 
 
@@ -158,4 +206,3 @@ pub fn terminal_output(data: &InformationManager, ascii: &AsciiArt) {
 
     // let _ = handle.join();
 
-}
